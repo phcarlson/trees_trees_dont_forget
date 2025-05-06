@@ -27,10 +27,10 @@ def load_dataset(set_name):
         return None
 
 
-def append_negative_samples(dataframe, output_file="bac_arch_neg.parquet"):
+def load_negative_samples(dataframe, output_file="bac_arch_neg.parquet"):
     if os.path.exists(output_file):
         neg_df = pd.read_parquet(output_file)
-        return pd.concat([dataframe, neg_df])
+        return neg_df
     else:
         print("Bach arch negative samples do not already exist, so will be created")
     
@@ -50,24 +50,20 @@ def append_negative_samples(dataframe, output_file="bac_arch_neg.parquet"):
     
     # Combine the negative samples with the original dataset's pos ones
     # Per https://www.geeksforgeeks.org/make-a-pandas-dataframe-with-two-dimensional-list-python/
-    new_neg_df = pd.DataFrame(negative_samples, columns=['Seq1', 'Seq2', 'Label'])
+    new_neg_df = pd.DataFrame(negative_samples, columns=['Seq1', 'Seq2', 'Label']).reset_index(drop=True)
     # merged_samples = pd.concat([dataframe, new_neg_df])
     
-    # Adjust ordering
-    # Per https://www.geeksforgeeks.org/pandas-how-to-shuffle-a-dataframe-rows/ then reset the index since that gets shuffled too I think?
-    shuffled_neg_df = new_neg_df.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)
-    
     # Read that a parquet better preserves the datatypes for easier loading
-    shuffled_neg_df.to_parquet(output_file)
+    new_neg_df.to_parquet(output_file)
     print(f"Negative samples saved to '{output_file}'")
     
-    return shuffled_neg_df
+    return new_neg_df
 
 
-def append_swapped_positive_samples(dataframe, output_file="bac_arch_swapped_pos.parquet"):
+def load_swapped_positive_samples(dataframe, output_file="bac_arch_swapped_pos.parquet"):
     if os.path.exists(output_file):
         pos_df = pd.read_parquet(output_file)
-        return pd.concat([dataframe, pos_df])
+        return pos_df
     else:
         print("Bach arch swapped pos samples do not already exist, so will be created")
     
@@ -79,18 +75,17 @@ def append_swapped_positive_samples(dataframe, output_file="bac_arch_swapped_pos
         seq2 = dataframe.iloc[i]['Seq2']
         positive_samples.append([seq2, seq1, 1])
         
-    new_pos_df = pd.DataFrame(positive_samples, columns=['Seq1', 'Seq2', 'Label'])
+    new_pos_df = pd.DataFrame(positive_samples, columns=['Seq1', 'Seq2', 'Label']).reset_index(drop=True)
     # merged_samples = pd.concat([dataframe, new_pos_df])
     
     # Adjust ordering
     # Per https://www.geeksforgeeks.org/pandas-how-to-shuffle-a-dataframe-rows/ then reset the index since that gets shuffled too I think?
-    shuffled_pos_samples = new_pos_df.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)
     
     # Read that a parquet better preserves the datatypes for easier loading
-    shuffled_pos_samples.to_parquet(output_file)
+    new_pos_df.to_parquet(output_file)
     print(f"Pos samples saved to '{output_file}'")
     
-    return shuffled_pos_samples
+    return new_pos_df
 
 def pad_sequences(df, max_len, char_for_padding='-'):
     """ Pad sequences to the same length with a specified padding character.
@@ -141,7 +136,7 @@ def load_encoded_data(file_name):
         seq1_encoded, seq2_encoded = joblib.load(file_name)
         print(f"One-hot data was found at {file_name}")
         return seq1_encoded, seq2_encoded
-    except FileNotFoundError:
+    except Exception as e:
         print(f"{file_name} wasn't found.")
         return None
     
@@ -158,19 +153,16 @@ def load_model(file_name):
         model = joblib.load(file_name)
         print(f"Model loaded from {file_name}")
         return model
-    except FileNotFoundError:
+    except Exception as e:
         print(f"{file_name} not found. :(")
         return None
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   
 # class BacArchDataset(Dataset):
 #     ''' With inspo from my CS 389 course for custom dataset to work with the dataloader'''
-#     def __init__(self):
-#         # First we load the raw df from HF
-#         raw_dataframe = load_dataset('BacArch')
-
-#         # Now to add the negative samples
-#         self.dataframe = append_negative_samples(raw_dataframe)
+#     def __init__(self, df):
+       
+#         self.dataframe = df
 #         # self.dataframe = raw_dataframe
 
 #     def __len__(self):
@@ -189,7 +181,32 @@ def load_model(file_name):
         
 #         # Once flattened concat together to make one big input of 2 * 21 * max seq length
 #         return torch.tensor(features_for_one_match, dtype=torch.float32), torch.tensor(label, dtype=torch.float32)
+from scipy.sparse import csr_matrix
 
+class BacArchDataset(Dataset):
+    ''' Custom Dataset for BacArch data with sparse matrix support '''
+    def __init__(self, X_sparse, y):
+        """
+        X_sparse: A sparse matrix of shape (n_samples, n_features)
+        y: Labels corresponding to the sequences
+        """
+        self.X_sparse = X_sparse
+        self.y = y
+
+    def __len__(self):
+        return len(self.y)
+
+    def __getitem__(self, idx):
+        # Get the sparse row for the current sample
+        seq_features = self.X_sparse[idx].toarray().flatten()  # Convert sparse to dense (flattened)
+        label = self.y[idx]
+        
+        # Convert to torch tensors
+        features_tensor = torch.tensor(seq_features, dtype=torch.float32)
+        label_tensor = torch.tensor(label, dtype=torch.float32)
+
+        return features_tensor, label_tensor
+    
 def main():
     pass
 
