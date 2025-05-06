@@ -20,13 +20,12 @@ class SimpleNN(nn.Module):
     def __init__(self, input_dim):
         super(SimpleNN, self).__init__()
         self.model = nn.Sequential(
-            nn.Linear(input_dim, 1024),
+            nn.Linear(input_dim, 512), 
             nn.ReLU(),
-            nn.Linear(1024, 256),
+            nn.Linear(512, 128),
             nn.ReLU(),
-            nn.Linear(256, 1),
+            nn.Linear(128, 1),       
         )
-
     def forward(self, x):
         return self.model(x)
 
@@ -38,10 +37,10 @@ def train_model(X_train, y_train, input_dim, batch_size=64, epochs=2):
     optimizer = optim.Adam(model.parameters(), lr=0.0001)
     num_pos = (y_train == 1).sum()
     num_neg = (y_train == 0).sum()
-    pos_weight = torch.tensor([num_neg / num_pos]).to(device)
+    # pos_weight = torch.tensor([num_neg / num_pos]).to(device)
 
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    # criterion = nn.BCELoss()
+    # criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    criterion = nn.BCEWithLogitsLoss()
 
     # Thank you CS 389
     dataset = BacArchDataset(X_train, y_train)
@@ -109,9 +108,9 @@ def compute_metrics(model, X_val, y_val, batch_size=128):
 
     # Compute metrics for the positive class (pos_label=1)
     accuracy = accuracy_score(val_labels, val_preds_binary)
-    precision = precision_score(val_labels, val_preds_binary, pos_label=1)
-    recall = recall_score(val_labels, val_preds_binary, pos_label=1)
-    f1 = f1_score(val_labels, val_preds_binary, pos_label=1)  # Only compute F1 for positive class
+    precision = precision_score(val_labels, val_preds_binary, average="weighted")
+    recall = recall_score(val_labels, val_preds_binary, average="weighted")
+    f1 = f1_score(val_labels, val_preds_binary, average="weighted") 
 
     print(f"Accuracy: {accuracy:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
     plot_confusion(val_labels, val_preds_binary)
@@ -129,15 +128,15 @@ def main():
     neg_df_invariant["pair_id"] = -1 
     neg_df_invariant["source"] = "negative"
 
-    pos_df_invariant = load_swapped_positive_samples(raw_dataframe)
-    pos_df_invariant["pair_id"] = raw_dataframe["pair_id"]
-    pos_df_invariant["source"] = "swapped_positive"
+    # pos_df_invariant = load_swapped_positive_samples(raw_dataframe)
+    # pos_df_invariant["pair_id"] = raw_dataframe["pair_id"]
+    # pos_df_invariant["source"] = "swapped_positive"
 
     merged_df = pd.concat([raw_dataframe, neg_df_invariant])
     merged_df = merged_df.sample(frac=1, random_state=42)
 
 
-    paired_df_no_swapped = merged_df[~merged_df["source"].isin(["swapped_positive"])]
+    # paired_df_no_swapped = merged_df[~merged_df["source"].isin(["swapped_positive"])]
 
 
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
@@ -161,38 +160,38 @@ def main():
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
     print("CONCATENATING COLS FOR INPUTS....")
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")   
-    # X = hstack([seq1_encoded, seq2_encoded]) 
-    # y = np.array(merged_df["Label"])
-    X_no_swapped = hstack([seq1_encoded[paired_df_no_swapped.index], seq2_encoded[paired_df_no_swapped.index]])
-    y_no_swapped = np.array(paired_df_no_swapped["Label"])
+    X = hstack([seq1_encoded, seq2_encoded]) 
+    y = np.array(merged_df["Label"])
+    # X_no_swapped = hstack([seq1_encoded[paired_df_no_swapped.index], seq2_encoded[paired_df_no_swapped.index]])
+    # y_no_swapped = np.array(paired_df_no_swapped["Label"])
 
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
     print("TRAINING AND EVALUATING NN WITH K-FOLD CROSS-VALIDATION....")
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")    
-    k_folds = 5
+    k_folds = 2
     fold_metrics = []
     fold_losses = []
 
     k_fold = StratifiedKFold(n_splits = k_folds, shuffle=True, random_state=42)
 
-    for fold, (train_idx, val_idx) in enumerate(k_fold.split(X_no_swapped, y_no_swapped)):
+    for fold, (train_idx, val_idx) in enumerate(k_fold.split(X, y)):
         print(f"\nTraining fold {fold+1}/{k_folds}...")
       
-        # Now merge the swapped positives based on their pair_id, making sure they are ONLY in the train or val split... NEVER BOTH for leakage
-        swapped_pos_train = merged_df[(merged_df["Label"] == 1) & (merged_df["pair_id"].isin(paired_df_no_swapped.iloc[train_idx]["pair_id"]))]
-        swapped_pos_val = merged_df[(merged_df["Label"] == 1) & (merged_df["pair_id"].isin(paired_df_no_swapped.iloc[val_idx]["pair_id"]))]
+        # # Now merge the swapped positives based on their pair_id, making sure they are ONLY in the train or val split... NEVER BOTH for leakage
+        # swapped_pos_train = merged_df[(merged_df["Label"] == 1) & (merged_df["pair_id"].isin(paired_df_no_swapped.iloc[train_idx]["pair_id"]))]
+        # swapped_pos_val = merged_df[(merged_df["Label"] == 1) & (merged_df["pair_id"].isin(paired_df_no_swapped.iloc[val_idx]["pair_id"]))]
         
         # Assign training and validation sets
-        X_train, X_val = X_no_swapped[train_idx], X_no_swapped[val_idx]
-        y_train, y_val = y_no_swapped[train_idx], y_no_swapped[val_idx]
+        X_train, X_val = X[train_idx], X[val_idx]
+        y_train, y_val = y[train_idx], y[val_idx]
 
-        X_train = vstack([X_train, hstack([seq1_encoded[swapped_pos_train.index], seq2_encoded[swapped_pos_train.index]])])
-        y_train = np.concatenate([y_train, np.ones(len(swapped_pos_train))])
+        # X_train = vstack([X_train, hstack([seq1_encoded[swapped_pos_train.index], seq2_encoded[swapped_pos_train.index]])])
+        # y_train = np.concatenate([y_train, np.ones(len(swapped_pos_train))])
 
-        X_val = vstack([X_val, hstack([seq1_encoded[swapped_pos_val.index], seq2_encoded[swapped_pos_val.index]])])
-        y_val = np.concatenate([y_val, np.ones(len(swapped_pos_val))])
+        # X_val = vstack([X_val, hstack([seq1_encoded[swapped_pos_val.index], seq2_encoded[swapped_pos_val.index]])])
+        # y_val = np.concatenate([y_val, np.ones(len(swapped_pos_val))])
 
-        model, losses_across_batches = train_model(X_train, y_train, X_train.shape[1], batch_size=64, epochs=10)
+        model, losses_across_batches = train_model(X_train, y_train, X_train.shape[1], batch_size=128, epochs=10)
         fold_losses.append(losses_across_batches)
 
         metrics = compute_metrics(model, X_val, y_val)
