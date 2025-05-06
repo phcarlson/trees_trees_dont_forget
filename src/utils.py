@@ -7,9 +7,13 @@ import pandas as pd
 import numpy as np
 import torch
 import os 
+import joblib
 
-PROTEIN_CATEGORIES = list('ACDEFGHIKLMNPQRSTVWYU')
 RANDOM_SEED = 5525
+
+# The 20 amino acids (+ U ??)
+PROTEIN_CATEGORIES = list('ACDEFGHIKLMNPQRSTVWYU')
+
 
 def load_dataset(set_name):
     if set_name == "BacArch":
@@ -65,56 +69,103 @@ def append_negative_samples(dataframe, output_file="bac_arch_neg.parquet"):
     
     return merged_samples
 
-# def one_hot_encode_and_pad(sequence, max_len = 1000):
+def pad_sequences(df, max_len, char_for_padding='-'):
+    """ Pad sequences to the same length with a specified padding character.
+        Once converted to one-hot, where we ignore unknown chars, this will make the one-hot encoded padded Scols all 0! """
 
-#     # Init the OneHotEncoder
-#     encoder = OneHotEncoder(categories=[PROTEIN_CATEGORIES], dtype=int)
-#     # encoder.fit(np.array(PROTEIN_CATEGORIES).reshape(-1, 1))
+    # Per https://www.w3schools.com/python/ref_string_ljust.asp where you just left justify and pad any string, I first trim any too long, then pad any too short
+    df["MatchedSeqs"] = df["MatchedSeqs"].apply(lambda matched_seq: matched_seq[:max_len].ljust(max_len, char_for_padding))
+    return df
 
-#     # Raw one hot encoding, which should be of size sequence len x num categories (20)
-#     encoded =  encoder.transform(sequence).toarray()
-#     padded_or_clipped = encoded
 
-#     encoded = np.zeros((max_len, len(PROTEIN_CATEGORIES)), dtype=int)
-
-def one_hot_encode_sequence(sequence, max_len=1000):
+def one_hot_encode_batch(dataframe, max_len, padding_char='-'):
     """
-    One-hot encodes the sequence, assuming the sequence contains only characters from the alphabet.
-    Pads to max_len if the sequence is shorter.
+    One-hot encodes a batch of sequence matches concatenated, padded, then encoded using scikit-learn's OneHotEncoder.
     """
-    # Create a mapping from character to index
-    char_positions = {}
-    for i, char in enumerate(PROTEIN_CATEGORIES):
-        char_positions[char] = i
+    # First, merges the pairs and pad
+    df_padded = pad_sequences(dataframe, max_len, padding_char)
+    # print(df_padded.iloc[0]["MatchedSeqs"])
 
-    # Set up the cols of 0s, which should be of size num categories (20) x  desired/standardized input length
-    encoded = np.zeros((len(PROTEIN_CATEGORIES), max_len), dtype=int)
-    for i, char in enumerate(sequence[:max_len]):
-        # Gets the col and fills 1 in the appropriate element corresponding to that char based on the map
-        encoded[char_positions[char], i] = 1
+    # After padding, our matched seq super string is still... a string. We need it to be an array to put into the models. 
+    # Thus this converts each string to a list first, and then we return a new col per char list to plop in each row
+    char_cols = df_padded['MatchedSeqs'].apply(lambda matched_seq: pd.Series(list(matched_seq)))
 
-    return encoded
+    # Then we can label em as each position
+    char_cols.columns = [f"Pos_{i}" for i in range(max_len)]
+    # print(char_cols)
 
-class BacArchDataset(Dataset):
-    ''' With inspo from my CS 389 course for custom dataset to work with the dataloader'''
-    def __init__(self):
-        # First we load the raw df from HF
-        raw_dataframe = load_dataset('BacArch')
+    # I have max len cols and each should use the protein categories for encoding
+    # categories_per_position = [PROTEIN_CATEGORIES] * max_len
+    encoder = OneHotEncoder(categories=[PROTEIN_CATEGORIES] * max_len, handle_unknown="ignore")
+    encoder.fit(char_cols)
+    df_encoded = encoder.transform(char_cols)  
+    # Should be num datapoints * (21 * max seq len)
+    # print(df_encoded)
+    print(df_encoded.shape)
 
-        # Now to add the negative samples
-        self.dataframe = append_negative_samples(raw_dataframe)
-        # self.dataframe = raw_dataframe
+    return df_encoded
 
-    def __len__(self):
-        return len(self.dataframe)
+# Per https://stackoverflow.com/questions/20662023/save-python-random-forest-model-to-file
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def save_encoded_data(seq1_encoded, seq2_encoded, file_name):
+    """ Save one-hot encoded data to file to avoid having to redo it every time """
+    joblib.dump((seq1_encoded, seq2_encoded), file_name)
+    print(f"Encoded data saved to {file_name}")
 
-    def __getitem__(self, idx):
-        seq1 = self.dataframe.iloc[idx]['Seq1']
-        seq2 = self.dataframe.iloc[idx]['Seq2']
-        label = self.dataframe.iloc[idx]['Label']
-        seq1_encoded = one_hot_encode_sequence(seq1)
-        seq2_encoded = one_hot_encode_sequence(seq2)
-        return torch.tensor(seq1_encoded, dtype=torch.float32), torch.tensor(seq2_encoded, dtype=torch.float32), torch.tensor(label, dtype=torch.float32)
+def load_encoded_data(file_name):
+    """ Load one-hot encoded data from file to avoid having to redo it every time """
+    try:
+        seq1_encoded, seq2_encoded = joblib.load(file_name)
+        print(f"One-hot data was found at {file_name}")
+        return seq1_encoded, seq2_encoded
+    except FileNotFoundError:
+        print(f"{file_name} wasn't found.")
+        return None
+    
+
+def save_model(model, file_name):
+    """ Save the trained model using joblib. """
+    joblib.dump(model, file_name)
+    print(f"Model saved to {file_name}")
+
+
+def load_model(file_name):
+    """ Load the model """
+    try:
+        model = joblib.load(file_name)
+        print(f"Model loaded from {file_name}")
+        return model
+    except FileNotFoundError:
+        print(f"{file_name} not found. :(")
+        return None
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  
+# class BacArchDataset(Dataset):
+#     ''' With inspo from my CS 389 course for custom dataset to work with the dataloader'''
+#     def __init__(self):
+#         # First we load the raw df from HF
+#         raw_dataframe = load_dataset('BacArch')
+
+#         # Now to add the negative samples
+#         self.dataframe = append_negative_samples(raw_dataframe)
+#         # self.dataframe = raw_dataframe
+
+#     def __len__(self):
+#         return len(self.dataframe)
+
+#     def __getitem__(self, idx):
+#         seq1 = self.dataframe.iloc[idx]['Seq1']
+#         seq2 = self.dataframe.iloc[idx]['Seq2']
+#         label = self.dataframe.iloc[idx]['Label']
+
+#         # By flattening, each should turn into a 21 (because of U?) * max seq length long input
+#         seq1_encoded_flattened = one_hot_encode_sequence(seq1).flatten()
+#         seq2_encoded_flattened  = one_hot_encode_sequence(seq2).flatten()
+        
+#         features_for_one_match = np.concatenate([seq1_encoded_flattened, seq2_encoded_flattened])
+        
+#         # Once flattened concat together to make one big input of 2 * 21 * max seq length
+#         return torch.tensor(features_for_one_match, dtype=torch.float32), torch.tensor(label, dtype=torch.float32)
 
 def main():
     pass
