@@ -29,13 +29,14 @@ def load_dataset(set_name):
 
 def append_negative_samples(dataframe, output_file="bac_arch_neg.parquet"):
     if os.path.exists(output_file):
-        return pd.read_parquet(output_file)
+        neg_df = pd.read_parquet(output_file)
+        return pd.concat([dataframe, neg_df])
     else:
         print("Bach arch negative samples do not already exist, so will be created")
     
     negative_samples = []
     
-    # Create negative samples by pairing each Seq1 with all other Seq2
+    # Create negative samples by pairing each Seq1 with all other Seq2, and swapping them too for order invariance
     for i in range(len(dataframe)):
         seq1 = dataframe.iloc[i]['Seq1']
         for j in range(len(dataframe)):
@@ -44,30 +45,52 @@ def append_negative_samples(dataframe, output_file="bac_arch_neg.parquet"):
                 seq2 = dataframe.iloc[j]['Seq2']
                 # We know these are not similar as there is only 1 true match in the dataset
                 negative_samples.append([seq1, seq2, 0])
-    
-    # Flipping the order, create negative samples by pairing each Seq2 with all other Seq1
-    for i in range(len(dataframe)):
-        seq2 = dataframe.iloc[i]['Seq2']
-        #  except itself
-        for j in range(len(dataframe)):
-            if i != j:
-                seq1 = dataframe.iloc[j]['Seq1']
-                negative_samples.append([seq1, seq2, 0])
+                negative_samples.append([seq2, seq1, 0])
 
+    
     # Combine the negative samples with the original dataset's pos ones
     # Per https://www.geeksforgeeks.org/make-a-pandas-dataframe-with-two-dimensional-list-python/
     new_neg_df = pd.DataFrame(negative_samples, columns=['Seq1', 'Seq2', 'Label'])
-    merged_samples = pd.concat([dataframe, new_neg_df])
+    # merged_samples = pd.concat([dataframe, new_neg_df])
     
     # Adjust ordering
     # Per https://www.geeksforgeeks.org/pandas-how-to-shuffle-a-dataframe-rows/ then reset the index since that gets shuffled too I think?
-    merged_samples = merged_samples.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)
+    shuffled_neg_df = new_neg_df.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)
     
     # Read that a parquet better preserves the datatypes for easier loading
-    merged_samples.to_parquet(output_file)
+    shuffled_neg_df.to_parquet(output_file)
     print(f"Negative samples saved to '{output_file}'")
     
-    return merged_samples
+    return shuffled_neg_df
+
+
+def append_swapped_positive_samples(dataframe, output_file="bac_arch_swapped_pos.parquet"):
+    if os.path.exists(output_file):
+        pos_df = pd.read_parquet(output_file)
+        return pd.concat([dataframe, pos_df])
+    else:
+        print("Bach arch swapped pos samples do not already exist, so will be created")
+    
+    positive_samples = []
+
+    # Just swap the order
+    for i in range(len(dataframe)):
+        seq1 = dataframe.iloc[i]['Seq1']
+        seq2 = dataframe.iloc[i]['Seq2']
+        positive_samples.append([seq2, seq1, 1])
+        
+    new_pos_df = pd.DataFrame(positive_samples, columns=['Seq1', 'Seq2', 'Label'])
+    # merged_samples = pd.concat([dataframe, new_pos_df])
+    
+    # Adjust ordering
+    # Per https://www.geeksforgeeks.org/pandas-how-to-shuffle-a-dataframe-rows/ then reset the index since that gets shuffled too I think?
+    shuffled_pos_samples = new_pos_df.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)
+    
+    # Read that a parquet better preserves the datatypes for easier loading
+    shuffled_pos_samples.to_parquet(output_file)
+    print(f"Pos samples saved to '{output_file}'")
+    
+    return shuffled_pos_samples
 
 def pad_sequences(df, max_len, char_for_padding='-'):
     """ Pad sequences to the same length with a specified padding character.
@@ -172,3 +195,60 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+    
+
+def eval_set(model, data_loader, device):
+    model.eval()
+    all_preds = []
+    all_labels = []
+
+    with torch.no_grad():
+        for seq1, seq2, label in data_loader:
+            # Move data to the same device as the model
+            seq1, seq2, label = seq1.to(device), seq2.to(device), label.to(device)
+
+            # Concatenate the sequences and flatten them
+            input_tensor = torch.cat((seq1, seq2), dim=1)
+            input_tensor = input_tensor.view(seq1.size(0), -1)
+
+            # Forward pass
+            outputs = model(input_tensor).view(-1)
+
+            # Make predictions: threshold at 0.5 for binary classification
+            preds = (outputs >= 0.5).float()
+
+            # Store predictions and labels on the CPU for metric calculation
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(label.cpu().numpy())
+
+    # Compute metrics
+    recall = recall_score(all_labels, all_preds)
+    f1 = f1_score(all_labels, all_preds)
+    precision = precision_score(all_labels, all_preds)
+    accuracy = accuracy_score(all_labels, all_preds)
+
+    print(f"Precision: {precision:.4f}")
+    print(f"Recall:    {recall:.4f}")
+    print(f"F1 Score:  {f1:.4f}")
+    print(f"Accuracy:  {accuracy:.4f}")
+    plot_confusion(all_preds, all_labels)
+
+def plot_confusion(preds, labels):
+    # matrix = confusion_matrix(labels, preds)
+
+    # # Plot the confusion matrix using seaborn
+    # plt.figure(figsize=(6, 4))
+    # sns.heatmap(matrix, annot=True, fmt="d", cmap="Blues", xticklabels=["Negative", "Positive"], yticklabels=["Negative", "Positive"])
+    # plt.xlabel("Predicted")
+    # plt.ylabel("Actual")
+    # plt.title("Confusion Matrix")
+    # plt.show()
+
+    cm = confusion_matrix(labels, preds, labels=[0, 1])
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=[0, 1], yticklabels=[0, 1])
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.title('Confusion Matrix')
+    plt.show()

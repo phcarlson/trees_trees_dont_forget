@@ -4,8 +4,9 @@ from sklearn.metrics import recall_score, f1_score, precision_score, confusion_m
 from scipy.sparse import hstack, vstack
 import numpy as np
 
-from utils import append_negative_samples, plot_confusion, load_dataset, load_encoded_data, save_encoded_data, load_model, save_model, one_hot_encode_batch
-from sklearn.model_selection import KFold
+from utils import append_negative_samples, append_swapped_positive_samples, plot_confusion, load_dataset, load_encoded_data, save_encoded_data, load_model, save_model, one_hot_encode_batch
+# from sklearn.model_selection import KFold
+from sklearn.model_selection import StratifiedKFold
 
 def train_random_forest(X_train, y_train, n_estimators = 10, max_depth = 30):
     # Following the seed tradition here?? lol https://www.reddit.com/r/datascience/comments/17kxd5s/data_folks_of_reddit_how_do_you_choose_a_random/
@@ -79,10 +80,10 @@ def compute_metrics_cross_validation(X, y, all_seq1_encoded, all_seq2_encoded, k
     f1_values_at_k = {top_k: [] for top_k in k_values}
 
     # Splits up the dataset into k folds to get a vibe for how well it does on the holdout over n over since we don't have a test set
-    kf = KFold(n_splits=k_folds, shuffle=True, random_state=42)
+    kf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=42)
     
     fold = 1
-    for train_idx, val_idx in kf.split(X):
+    for train_idx, val_idx in kf.split(X, y):
         print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
         print(f"TRAINING TO VALIDATE WITH FOLD {fold}....")
         print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")          
@@ -166,7 +167,8 @@ def main():
     print("LOADING BACARCH DATASET, ADDING NEGATIVE SAMPLES, AND SHUFFLING....")
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")    
     raw_dataframe = load_dataset('BacArch')
-    dataframe = append_negative_samples(raw_dataframe)
+    dataframe_with_neg = append_negative_samples(raw_dataframe)
+    dataframe = append_swapped_positive_samples(dataframe_with_neg)
     shuffled = dataframe.sample(frac=1, random_state=42).reset_index(drop=True)
 
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
