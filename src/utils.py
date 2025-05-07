@@ -207,29 +207,6 @@ class BacArchDataset(Dataset):
 
         return features_tensor, label_tensor
 
-# class BacArchDatasetNotSparse(Dataset):
-#     ''' Custom Dataset for BacArch data with sparse matrix support '''
-#     def __init__(self, X, y):
-#         """
-#         X_sparse: A sparse matrix of shape (n_samples, n_features)
-#         y: Labels corresponding to the sequences
-#         """
-#         self.X = X
-#         self.y = y
-
-#     def __len__(self):
-#         return len(self.y)
-
-#     def __getitem__(self, idx):
-#         # Get the sparse row for the current sample
-#         seq_features = self.X
-#         label = self.y[idx]
-        
-#         # Convert to torch tensors
-#         features_tensor = torch.tensor(seq_features, dtype=torch.float32)
-#         label_tensor = torch.tensor(label, dtype=torch.float32)
-
-#         return features_tensor, label_tensor
     
 def main():
     pass
@@ -238,55 +215,7 @@ if __name__ == "__main__":
     main()
 
 
-    
-
-def eval_set(model, data_loader, device):
-    model.eval()
-    all_preds = []
-    all_labels = []
-
-    with torch.no_grad():
-        for seq1, seq2, label in data_loader:
-            # Move data to the same device as the model
-            seq1, seq2, label = seq1.to(device), seq2.to(device), label.to(device)
-
-            # Concatenate the sequences and flatten them
-            input_tensor = torch.cat((seq1, seq2), dim=1)
-            input_tensor = input_tensor.view(seq1.size(0), -1)
-
-            # Forward pass
-            outputs = model(input_tensor).view(-1)
-
-            # Make predictions: threshold at 0.5 for binary classification
-            preds = (outputs >= 0.5).float()
-
-            # Store predictions and labels on the CPU for metric calculation
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(label.cpu().numpy())
-
-    # Compute metrics
-    recall = recall_score(all_labels, all_preds)
-    f1 = f1_score(all_labels, all_preds)
-    precision = precision_score(all_labels, all_preds)
-    accuracy = accuracy_score(all_labels, all_preds)
-
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall:    {recall:.4f}")
-    print(f"F1 Score:  {f1:.4f}")
-    print(f"Accuracy:  {accuracy:.4f}")
-    plot_confusion(all_preds, all_labels)
-
 def plot_confusion(preds, labels):
-    # matrix = confusion_matrix(labels, preds)
-
-    # # Plot the confusion matrix using seaborn
-    # plt.figure(figsize=(6, 4))
-    # sns.heatmap(matrix, annot=True, fmt="d", cmap="Blues", xticklabels=["Negative", "Positive"], yticklabels=["Negative", "Positive"])
-    # plt.xlabel("Predicted")
-    # plt.ylabel("Actual")
-    # plt.title("Confusion Matrix")
-    # plt.show()
-
     cm = confusion_matrix(labels, preds, labels=[0, 1])
     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=[0, 1], yticklabels=[0, 1])
     plt.xlabel('Predicted')
