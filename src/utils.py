@@ -45,7 +45,7 @@ def load_negative_samples(dataframe, output_file="bac_arch_neg.parquet"):
                 seq2 = dataframe.iloc[j]['Seq2']
                 # We know these are not similar as there is only 1 true match in the dataset
                 negative_samples.append([seq1, seq2, 0])
-                negative_samples.append([seq2, seq1, 0])
+                # negative_samples.append([seq2, seq1, 0])
 
     
     # Combine the negative samples with the original dataset's pos ones
@@ -206,6 +206,30 @@ class BacArchDataset(Dataset):
         label_tensor = torch.tensor(label, dtype=torch.float32)
 
         return features_tensor, label_tensor
+
+# class BacArchDatasetNotSparse(Dataset):
+#     ''' Custom Dataset for BacArch data with sparse matrix support '''
+#     def __init__(self, X, y):
+#         """
+#         X_sparse: A sparse matrix of shape (n_samples, n_features)
+#         y: Labels corresponding to the sequences
+#         """
+#         self.X = X
+#         self.y = y
+
+#     def __len__(self):
+#         return len(self.y)
+
+#     def __getitem__(self, idx):
+#         # Get the sparse row for the current sample
+#         seq_features = self.X
+#         label = self.y[idx]
+        
+#         # Convert to torch tensors
+#         features_tensor = torch.tensor(seq_features, dtype=torch.float32)
+#         label_tensor = torch.tensor(label, dtype=torch.float32)
+
+#         return features_tensor, label_tensor
     
 def main():
     pass
