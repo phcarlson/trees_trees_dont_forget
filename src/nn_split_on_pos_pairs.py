@@ -41,18 +41,20 @@ class SimpleNN(nn.Module):
     def forward(self, x):
         return self.model(x)
 
-def train_model(X_train, y_train, input_dim, batch_size=64, epochs=2):
+def train_model(X_train, y_train, input_dim, batch_size=64, learning_rate=0.0001, epochs=2):
     # Attaches the model to the GPU instead of CPU speed it up
     model = SimpleNN(input_dim).to(device)
 
     # Adam is cool beans bc of momentum and stuff
-    optimizer = optim.Adam(model.parameters(), lr=0.0001)
-    # num_pos = (y_train == 1).sum()
-    # num_neg = (y_train == 0).sum()
-    # pos_weight = torch.tensor([num_neg / num_pos]).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-    # criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    criterion = nn.BCEWithLogitsLoss()
+    num_pos = (y_train == 1).sum()
+    num_neg = (y_train == 0).sum()
+    # Per https://docs.pytorch.org/docs/stable/generated/torch.nn.BCEWithLogitsLoss.html
+    pos_weight = torch.tensor([num_neg / num_pos]).to(device)
+
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    # criterion = nn.BCEWithLogitsLoss()
     # criterion = nn.MarginRankingLoss(margin=1.0)
 
     # Thank you CS 389
@@ -97,21 +99,22 @@ def compute_top1_f1_score(model, seq1_encoded, seq2_encoded, merged_df, val_idx,
 
     with torch.no_grad():
         for i in tqdm(val_idx):
-            seq1 = seq1_encoded[i]  # Get the seq1 encoding for the current index
+            # Get the seq1 encoding for the current validation index only
+            seq1 = seq1_encoded[i] 
 
             seq_2s_to_score_with_seq_1 = []
             true_labels = []
 
             scores_against_seq1 = []
-            # Pair seq1 with all other seq2 (skip the same pair for the true match)
+            # Pair seq1 with all other seq2, where the true match has label 1 and is otherwise 0
             for j in val_idx:
                 seq2 = seq2_encoded[j]
                 
-                label = 1 if i == j else 0  # True match for i == j, else negative
+                label = 1 if i == j else 0
                 true_labels.append(label)
 
                 # Concatenate seq1 and seq2 as in training phase
-                pair_input = hstack([seq1, seq2])  # Combine seq1 and seq2 for each pair
+                pair_input = hstack([seq1, seq2])
                 seq_2s_to_score_with_seq_1.append(pair_input)
 
 
@@ -130,6 +133,7 @@ def compute_top1_f1_score(model, seq1_encoded, seq2_encoded, merged_df, val_idx,
 
             # Append true label (always 1, because seq1 has exactly one match)
             y_true.append(1)
+            # Predicted label is either 1, if the true match was the top match, and 0 otherwise, meaning it failed to produce the correct top
             y_pred.append(predicted_label)
 
     # Compute precision, recall, and F1 score based on the true vs predicted labels
@@ -220,18 +224,18 @@ def main():
         X_pos_flipped = vstack(flipped_pos_samples)
         y_pos_flipped = np.ones(X_pos_flipped.shape[0])
 
-        repeat_factor = 3
-        X_pos_repeated = vstack([X_train[y_train == 1]] * repeat_factor)
-        y_pos_repeated = np.ones(X_pos_repeated.shape[0])
+        # repeat_factor = 3
+        # X_pos_repeated = vstack([X_train[y_train == 1]] * repeat_factor)
+        # y_pos_repeated = np.ones(X_pos_repeated.shape[0])
 
 
 
-        X_train = vstack([X_train, X_neg, X_pos_flipped, X_pos_repeated])
-        y_train = np.concatenate([y_train, y_neg, y_pos_flipped, y_pos_repeated])
+        X_train = vstack([X_train, X_neg, X_pos_flipped])
+        y_train = np.concatenate([y_train, y_neg, y_pos_flipped])
 
         X_train, y_train = shuffle(X_train, y_train, random_state=42)
 
-        model, losses_across_batches = train_model(X_train, y_train, X_train.shape[1], batch_size=128, epochs=5)
+        model, losses_across_batches = train_model(X_train, y_train, X_train.shape[1], batch_size=128, learning_rate=0.0001, epochs=5)
         fold_losses.append(losses_across_batches)
 
 

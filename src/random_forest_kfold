@@ -1,31 +1,19 @@
 from sklearn.model_selection import StratifiedKFold
 from sklearn.ensemble import RandomForestRegressor
-
-from tqdm import tqdm
-import torch
-import numpy as np
-import pandas as pd
 from scipy.sparse import hstack, vstack
-from utils import one_hot_encode_batch, plot_confusion, load_dataset, load_negative_samples, load_swapped_positive_samples, save_encoded_data, load_encoded_data
+from sklearn.metrics import recall_score, f1_score, precision_score
 from datetime import datetime
-import matplotlib.pyplot as plt
 from sklearn.utils import shuffle
-
-from sklearn.metrics import recall_score, f1_score, precision_score, confusion_matrix
-from scipy.sparse import hstack, vstack
+from tqdm import tqdm
 import numpy as np
 import pandas as pd
 
-# from sklearn.model_selection import KFold
-from sklearn.model_selection import StratifiedKFold
+from utils import one_hot_encode_batch, plot_confusion, load_dataset, save_encoded_data, load_encoded_data
 
-# Check if CUDA is available to attach, as using GPU will significantly speed process up
-
-
-def train_random_forest(X_train, y_train, n_estimators = 100, max_depth = 30):
+def train_random_forest(X_train, y_train, n_estimators = None, min_samples_split=2, max_depth = None, min_samples_leaf=1):
     # Following the seed tradition here?? lol https://www.reddit.com/r/datascience/comments/17kxd5s/data_folks_of_reddit_how_do_you_choose_a_random/
     # When n jobs is -1, utilizes all cores to train ASAP
-    random_forest_model = RandomForestRegressor(n_estimators=n_estimators, random_state=42, max_depth=max_depth, n_jobs=-1, min_samples_split=10)
+    random_forest_model = RandomForestRegressor(n_estimators=n_estimators, random_state=42, n_jobs=-1, max_depth=max_depth, min_samples_split=min_samples_split, min_samples_leaf=min_samples_leaf)
     random_forest_model.fit(X_train, y_train)
     return random_forest_model
 
@@ -34,34 +22,34 @@ def compute_top1_f1_score(model, seq1_encoded, seq2_encoded, merged_df, val_idx)
     y_true = []
     y_pred = []
 
-    with torch.no_grad():
-        for i in tqdm(val_idx):
-            seq1 = seq1_encoded[i]  # Get the seq1 encoding for the current index
+    for i in tqdm(val_idx):
+        # Get the seq1 encoding for the current validation index only
+        seq1 = seq1_encoded[i] 
+        seq_2s_to_score_with_seq_1 = []
+        true_labels = []
 
-            seq_2s_to_score_with_seq_1 = []
-            true_labels = []
-
-            scores_against_seq1 = []
-            # Pair seq1 with all other seq2 (skip the same pair for the true match)
-            for j in val_idx:
-                seq2 = seq2_encoded[j]
-                
-                label = 1 if i == j else 0  # True match for i == j, else negative
-                true_labels.append(label)
-
-                # Concatenate seq1 and seq2 as in training phase
-                pair_input = hstack([seq1, seq2])  # Combine seq1 and seq2 for each pair
-                seq_2s_to_score_with_seq_1.append(pair_input)
+        scores_against_seq1 = []
+        # Pair seq1 with all other seq2, where the true match has label 1 and is otherwise 0
+        for j in val_idx:
+            seq2 = seq2_encoded[j]
             
-            input_batch = vstack(seq_2s_to_score_with_seq_1)
-            scores_against_seq1 = model.predict(input_batch)
-            # Find top-1 prediction (index with the highest output value)
-            top1_idx = np.argmax(scores_against_seq1)
-            predicted_label = 1 if true_labels[top1_idx] == 1 else 0
+            label = 1 if i == j else 0 
+            true_labels.append(label)
 
-            # Append true label (always 1, because seq1 has exactly one match)
-            y_true.append(1)
-            y_pred.append(predicted_label)
+            # Concatenate seq1 and seq2 as in training phase
+            pair_input = hstack([seq1, seq2])
+            seq_2s_to_score_with_seq_1.append(pair_input)
+        
+        input_batch = vstack(seq_2s_to_score_with_seq_1)
+        scores_against_seq1 = model.predict(input_batch)
+        # Find top-1 prediction (index with the highest output value)
+        top1_idx = np.argmax(scores_against_seq1)
+        predicted_label = 1 if true_labels[top1_idx] == 1 else 0
+
+        # Append true label (always 1, because seq1 has exactly one match)
+        y_true.append(1)
+        # Predicted label is either 1, if the true match was the top match, and 0 otherwise, meaning it failed to produce the correct top
+        y_pred.append(predicted_label)
 
     # Compute precision, recall, and F1 score based on the true vs predicted labels
     precision = precision_score(y_true, y_pred)
@@ -89,7 +77,7 @@ def main():
     print("PADDING AND ENCODING SEQ 1 and SEQ 2 COLS....")
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")    
     encoded_filename = 'encoded_sequences.pkl'
-    loaded_encodings = None
+    loaded_encodings = load_encoded_data(encoded_filename)
     if loaded_encodings is None:
         seq1_df = merged_df[['Seq1']].copy()
         seq1_df.columns = ['MatchedSeqs']
@@ -110,11 +98,10 @@ def main():
     y = np.array(merged_df["Label"])
 
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-    print("TRAINING AND EVALUATING NN WITH K-FOLD CROSS-VALIDATION....")
+    print("TRAINING AND EVALUATING RANDOM FOREST WITH K-FOLD CROSS-VALIDATION....")
     print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")    
     k_folds = 5
     fold_metrics = []
-    fold_losses = []
 
     k_fold = StratifiedKFold(n_splits = k_folds, shuffle=True, random_state=42)
 
@@ -124,7 +111,6 @@ def main():
         # Assign training and validation sets
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = y[train_idx], y[val_idx]
-
 
         # print(train_idx)
         # print(val_idx)
@@ -159,15 +145,13 @@ def main():
         X_pos_repeated = vstack([X_train[y_train == 1]] * repeat_factor)
         y_pos_repeated = np.ones(X_pos_repeated.shape[0])
 
-
-
         X_train = vstack([X_train, X_neg, X_pos_flipped, X_pos_repeated])
         y_train = np.concatenate([y_train, y_neg, y_pos_flipped, y_pos_repeated])
 
         X_train, y_train = shuffle(X_train, y_train, random_state=42)
 
-        random_forest_model = train_random_forest(X_train, y_train)
-
+        # PASS YOUR HYPERPARAMS HERE
+        random_forest_model = train_random_forest(X_train, y_train, n_estimators=50, max_depth=15, min_samples_split=10)
 
         metrics = compute_top1_f1_score(random_forest_model, seq1_encoded, seq2_encoded, merged_df, val_idx)
         fold_metrics.append(metrics)
@@ -181,12 +165,11 @@ def main():
     print(f"\nAverage Metrics across {k_folds} folds:")
     print(f"Precision: {avg_precision:.4f}")
     print(f"Recall: {avg_recall:.4f}")
-    print(f"F1 Score: {avg_f1:.4f}")
+    print(f"F1: {avg_f1:.4f}")
 
-    # Convert the fold metrics to a DataFrame
     metrics_df = pd.DataFrame(fold_metrics)
     date = datetime.now()
-    # Save the fold metrics to a CSV file
+
     metrics_df.to_csv(f'rf_fold_metrics_{date}.csv', index=False)
 
 if __name__ == "__main__":
